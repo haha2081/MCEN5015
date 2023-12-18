@@ -1,0 +1,83 @@
+import cv2 as cv_lib
+import numpy as np
+import sys
+
+def load_camera_params(file_path='parameters/intrinsic.dat'):
+    param_file = open(file_path, 'r')
+
+    camera_matrix = []
+    distortion_coeffs = []
+    line = param_file.readline()
+    for _ in range(3):
+        line = param_file.readline().split()
+        line = [float(element) for element in line]
+        camera_matrix.append(line)
+
+    line = param_file.readline()
+    line = param_file.readline().split()
+    line = [float(element) for element in line]
+    distortion_coeffs.append(line)
+
+    return np.array(camera_matrix), np.array(distortion_coeffs)
+
+def calculate_qr_positions(cam_matrix, dist_coeffs, qr_points):
+    qr_corners = np.array([[0,0,0],
+                           [0,1,0],
+                           [1,1,0],
+                           [1,0,0]], dtype='float32').reshape((4,1,3))
+
+    success, rotation_vec, translation_vec = cv_lib.solvePnP(qr_corners, qr_points, cam_matrix, dist_coeffs)
+
+    unit_vector_pts = np.array([[0,0,0], [1,0,0], [0,1,0], [0,0,1]], dtype='float32').reshape((4,1,3))
+    if success:
+        projected_points, jacobian = cv_lib.projectPoints(unit_vector_pts, rotation_vec, translation_vec, cam_matrix, dist_coeffs)
+        return projected_points, rotation_vec, translation_vec
+
+    else: return [], [], []
+
+def display_axes(cam_matrix, dist_coeffs, video_source):
+    camera_capture = cv_lib.VideoCapture(video_source)
+
+    qr_detector = cv_lib.QRCodeDetector()
+
+    while True:
+        capture_success, frame = camera_capture.read()
+        if not capture_success: break
+
+        qr_found, qr_points = qr_detector.detect(frame)
+
+        if qr_found:
+            axes_points, rot_vec, trans_vec = calculate_qr_positions(cam_matrix, dist_coeffs, qr_points)
+
+            # BGR color format
+            axis_colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (0,0,0)]
+
+            if len(axes_points) > 0:
+                axes_points = axes_points.reshape((4,2))
+
+                start_point = (int(axes_points[0][0]),int(axes_points[0][1]))
+
+                for point, color in zip(axes_points[1:], axis_colors[:3]):
+                    end_point = (int(point[0]), int(point[1]))
+
+                    if start_point[0] > 5*frame.shape[1] or start_point[1] > 5*frame.shape[1]: break
+                    if end_point[0] > 5*frame.shape[1] or end_point[1] > 5*frame.shape[1]: break
+
+                    cv_lib.line(frame, start_point, end_point, color, 5)
+
+        cv_lib.imshow('frame', frame)
+
+        key_pressed = cv_lib.waitKey(20)
+        if key_pressed == 27: break # 27 is ESC key.
+
+    camera_capture.release()
+    cv_lib.destroyAllWindows()
+
+if __name__ == '__main__':
+    camera_matrix, distortion_coeffs = load_camera_params()
+
+    video_input = 'media/test.mp4'
+    if len(sys.argv) > 1:
+        video_input = int(sys.argv[1])
+
+    display_axes(camera_matrix, distortion_coeffs, video_input)
