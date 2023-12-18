@@ -1,0 +1,154 @@
+import serial
+import time
+import subprocess
+import cv2
+import os
+
+counter = 0
+
+data1 = []
+
+return_path = []
+
+pipe_path = "my_pipe"
+if not os.path.exists(pipe_path):
+    os.mkfifo(pipe_path)
+
+cpp_executable = "./get_blocks_cpp_demo"
+command = ["sudo", cpp_executable]
+
+process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+pipe = open(pipe_path, 'r')
+vid = cv2.VideoCapture(0)
+ser = serial.Serial('/dev/ttyACM0', 9600, timeout=1)
+
+def send_command(command):
+    ser.write(command.encode())
+    time.sleep(0.1) 
+
+def attackMode():
+        global counter
+        global data1
+       
+        try:
+                    while True:
+                        
+                        line = pipe.readline()
+
+                        if not line:
+                            time.sleep(0.1)  # Sleep to avoid high CPU usage
+                            continue
+
+                        
+                        # Process the data
+
+                        data = line.strip().split(',')
+                        data1.append(data)
+                        
+                   
+                        if data == ['R']:
+                            send_command("i")
+                            
+                          
+                        if data == ['L']:
+                            send_command("j")
+                           
+                        if counter > 1:
+
+                            if data1[counter] != data1[counter-1]:
+                                send_command("o")
+                                send_command("o")
+                                
+                        counter += 1
+
+        except KeyboardInterrupt:
+            print("Stopping.")
+        finally:
+            # Close the named pipe
+            pipe.close()
+            os.remove(pipe_path)
+
+
+while(True): 
+            
+
+            ret, frame = vid.read()
+
+            (h, w) = frame.shape[:2]
+
+            frame_center_x = w / 2
+            frame_center_y = h / 2
+
+            qcd = cv2.QRCodeDetector()
+            
+            retval, points = qcd.detect(frame)
+
+            if retval == False:
+                send_command('i')
+                time.sleep(.5)
+                send_command('s')
+                time.sleep(0.3)
+                
+            if retval == True:
+                qr_center_x = points[0][0][0] + points[0][2][0]
+                qr_center_y = points[0][0][1] + points[0][1][1]
+                cv2.circle(frame, (qr_center_x, qr_center_y), 5, (0, 255, 0), -1)
+
+                while abs(qr_center_x - frame_center_x) >= 10:
+                      send_command('i')
+                      send_command('r')
+                      time.sleep(2)
+
+
+                if abs(qr_center_x - frame_center_x) < 10:
+                      send_command('s')
+                
+
+                start_time = time.time()  
+
+                while time.time() - start_time < 6.5:
+                      
+                    send_command('b')
+
+
+                    if abs(qr_center_x - frame_center_x) >= 10 and qr_center_x > frame_center_x:
+                        send_command('r')
+                        time.sleep(.2)
+                        send_command('s')
+
+                    elif abs(qr_center_x - frame_center_x) >= 10 and qr_center_x < frame_center_x:
+                        send_command('l')
+                        time.sleep(.2)
+                        send_command('s')
+
+                
+
+                if time.time() >= 6.5:
+                    send_command('s')
+                    attackMode()
+                    time.sleep(10)
+
+                
+                send_command('f')
+
+                if abs(qr_center_x - frame_center_x) >= 10 and qr_center_x > frame_center_x:
+                    send_command('r')
+                    time.sleep(.2)
+                    send_command('s')
+
+                elif abs(qr_center_x - frame_center_x) >= 10 and qr_center_x < frame_center_x:
+                    send_command('l')
+                    time.sleep(.2)
+                    send_command('s')
+                
+
+            if cv2.waitKey(1) & 0xFF == ord('q'): 
+                    break
+
+# After the loop release the cap object 
+vid.release() 
+# Destroy all the windows 
+cv2.destroyAllWindows() 
+
+   
+
