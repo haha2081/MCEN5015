@@ -1,0 +1,488 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <math.h>
+#include <util/atomic.h> 
+#include <Servo.h>
+
+Servo motor1;
+Servo motor2;
+Servo shooter;
+
+void processInput(int speed_RR,int speed_RL,int speed_FR,int speed_FL);
+void readEncoder_RR();
+void readEncoder_RL();
+void readEncoder_FR();
+void readEncoder_FL();
+void Shoot();
+void SetPWM(const long pwm_num, byte pwm_channel);
+void goForward(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL);
+void goBackwad(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL);
+void moveRight(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL);
+void moveLeft(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL);
+void turnRight(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL);
+void turnLeft(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL);
+void stopRobot(int delay);
+void hardStop();
+//Encoder Pin A and Pin B
+    // Rear Right
+#define RR_EN_A 40
+#define RR_EN_B 41  
+    // Rear Left 
+#define RL_EN_A 32
+#define RL_EN_B 31
+    // Front Right
+#define FR_EN_A 29
+#define FR_EN_B 30
+    // Front Left 
+#define FL_EN_A 28
+#define FL_EN_B 27
+
+int p = 0 ;
+
+const int RightFrontMotor_PWM = 5; // Front Right
+const int LeftFrontMotor_PWM = 2; // Front Left
+const int RightRearMotor_PWM = 8; // Rear Right
+const int LeftRearMotor_PWM = 23; // Rear Left
+
+//Front motors
+const int RightFrontMotor_AIN1 = 7; // Front Right
+const int RightFrontMotor_AIN2 = 6; // Front Right
+const int LeftFrontMotor_BIN1 = 3; // Front Left
+const int LeftFrontMotor_BIN2 = 4; // Front Left
+
+//Rear motors
+const int RightRearMotor_AIN1 = 34; // Rear Right
+const int RightRearMotor_AIN2 = 9; // Rear Right
+const int LeftRearMotor_BIN1 = 21; // Rear Left
+const int LeftRearMotor_BIN2 = 22; // Rear Left
+
+long pwmLvalue = 255;
+long pwmRvalue = 255;
+byte pwmChannel;
+const char startOfNumberDelimiter = '<';
+const char endOfNumberDelimiter = '>';
+
+int target = 360;
+
+volatile float posi_RR = 0;
+volatile float posi_RL = 0;
+volatile float posi_FR = 0;
+volatile float posi_FL = 0;
+
+
+long testT = 0;
+
+long prevT = 0;
+float eprev_RR = 0;
+float eintegral_RR = 0;
+float eprev_RL = 0;
+float eintegral_RL = 0;
+float eprev_FR = 0;
+float eintegral_FR = 0;
+float eprev_FL = 0;
+float eintegral_FL = 0;
+
+
+float kp_RR = 0.85;
+float kd_RR = 0.2;
+float ki_RR = 0.01;
+
+float kp_RL = 0.79;
+float kd_RL = 0;
+float ki_RL = 0;
+
+float kp_FR = 1.2;
+float kd_FR = 0;
+float ki_FR = 0;
+
+float kp_FL = 0.25;
+float kd_FL = 0.15;
+float ki_FL = 0.05;
+
+byte c ;
+void setup(){
+    
+    Serial.begin(9600);
+
+
+     // Attach the motors to the pins
+  motor1.attach(14); // Attach motor1 to pin 14
+  motor2.attach(15); // Attach motor2 to pin 15
+  motor1.write(0); // Set motor1 speed
+  motor2.write(0); // Set motor1 speed
+  shooter.attach(26);
+  shooter.write(0);
+ 
+
+
+
+    //Encoder Setup
+    //Rear Right
+    pinMode(RR_EN_A, INPUT);
+    pinMode(RR_EN_B, INPUT);
+    //Rear Left
+    pinMode(RL_EN_A, INPUT);
+    pinMode(RL_EN_B, INPUT);
+    //Front Right
+    pinMode(FR_EN_A, INPUT);
+    pinMode(FR_EN_B, INPUT);
+    //Front Left
+    pinMode(FL_EN_A, INPUT);
+    pinMode(FL_EN_B, INPUT);
+
+    attachInterrupt(digitalPinToInterrupt(RR_EN_A), readEncoder_RR, RISING);
+    attachInterrupt(digitalPinToInterrupt(RL_EN_A), readEncoder_RL, RISING);
+    attachInterrupt(digitalPinToInterrupt(FR_EN_A), readEncoder_FR, RISING);
+    attachInterrupt(digitalPinToInterrupt(FL_EN_A), readEncoder_FL, RISING);
+    
+    //Setup RightFrontMotor 
+    pinMode(RightFrontMotor_AIN1, OUTPUT); //Initiates Motor Channel A1 pin
+    pinMode(RightFrontMotor_AIN2, OUTPUT); //Initiates Motor Channel A2 pin
+
+    //Setup LeftFrontMotor 
+    pinMode(LeftFrontMotor_BIN1, OUTPUT); //Initiates Motor Channel B1 pin
+    pinMode(LeftFrontMotor_BIN2, OUTPUT); //Initiates Motor Channel B2 pin
+
+    //Setup RightFrontMotor 
+    pinMode(RightRearMotor_AIN1, OUTPUT); //Initiates Motor Channel A1 pin
+    pinMode(RightRearMotor_AIN2, OUTPUT); //Initiates Motor Channel A2 pin
+
+    //Setup LeftFrontMotor 
+    pinMode(LeftRearMotor_BIN1, OUTPUT); //Initiates Motor Channel B1 pin
+    pinMode(LeftRearMotor_BIN2, OUTPUT); //Initiates Motor Channel B2 pin  
+
+    shooter.write(0); // hold balls
+      motor1.write(111); // Set motor1 speed
+      motor2.write(111); // Set motor1 speed
+      delay(1500);
+      shooter.write(90); // shoot balls
+      delay(2000);
+      motor1.write(30); // Set motor1 speed
+      motor2.write(30); // Set motor1 speed
+
+    Wire.begin();
+}
+
+void loop(){
+    
+
+    long currT = micros();
+    float deltaT = ((float)(currT - prevT))/1.0e6;
+    prevT = currT;
+
+    int pos_RR = 0;
+    int pos_RL = 0;
+    int pos_FR = 0;
+    int pos_FL = 0;
+
+    pos_RR = posi_RR;
+    pos_RL = posi_RL;
+    pos_FR = posi_FR;
+    pos_FL = posi_FL;
+    
+
+    int e_RR = target - pos_RR;
+    int e_RL = target - pos_RL;
+    int e_FR = target - pos_FR;
+    int e_FL = target - pos_FL;
+
+    float dedt_RR = (e_RR-eprev_RR)/(deltaT);
+    float dedt_RL = (e_RL-eprev_RL)/(deltaT);
+    float dedt_FR = (e_FR-eprev_FR)/(deltaT);
+    float dedt_FL = (e_FL-eprev_FL)/(deltaT);
+
+    eintegral_RR = eintegral_RR+e_RR*deltaT;
+    eintegral_RL = eintegral_RL+e_RL*deltaT;
+    eintegral_FR = eintegral_FR+e_FR*deltaT;
+    eintegral_FL = eintegral_FL+e_FL*deltaT;
+
+    float u_RR = kp_RR*e_RR + kd_RR*dedt_RR + ki_RR*eintegral_RR;
+    float u_RL = kp_RL*e_RL + kd_RL*dedt_RL + ki_RL*eintegral_RL;
+    float u_FR = kp_FR*e_FR + kd_FR*dedt_FR + ki_FR*eintegral_FR;
+    float u_FL = kp_FL*e_FL + kd_FL*dedt_FL + ki_FL*eintegral_FL;
+
+    float pwr_RR = fabs(u_RR);
+    float pwr_RL = fabs(u_RL);
+    float pwr_FR = fabs(u_FR);
+    float pwr_FL = fabs(u_FL);
+
+     if( pwr_RR > 60 ){
+        pwr_RR = 60;
+    } if( pwr_RL > 60 ){
+        pwr_RL = 60;
+    } if( pwr_FR > 60 ){
+        pwr_FR = 60;
+
+    } if( pwr_FR > 60 ){
+        pwr_FR = 60;
+    }
+
+    if (fabs(pos_FR) >= target) {
+        stopRobot(1000); 
+        p = 1;
+            
+            posi_RR = 0;
+            posi_RL = 0;
+            posi_FR = 0;
+            posi_FL = 0;
+        
+    } else {
+        
+    }
+    processInput(65, 65, 65, 69.55);
+    eprev_RR = e_RR;
+    eprev_RL = e_RL;
+    eprev_FR = e_FR;
+    eprev_FL = e_FL;
+
+  
+          
+    //       //Serial.println(posi_FR);
+    //       Serial.println(posi_FL);
+    //       //Serial.println(posi_RR);
+    //       //Serial.println(posi_RL);
+          
+
+  
+
+    
+}// void loop()
+
+void motorControl(String motorStr,int mdirection, int mspeed){
+  int IN1;
+  int IN2;
+  int motorPWM;
+  if (motorStr == "rf") {       //right front
+    IN1 = RightFrontMotor_AIN1; 
+    IN2 = RightFrontMotor_AIN2;
+    motorPWM = RightFrontMotor_PWM;
+  }   
+  else if (motorStr == "lf") { //left front
+    IN1 = LeftFrontMotor_BIN1; 
+    IN2 = LeftFrontMotor_BIN2;
+    motorPWM = LeftFrontMotor_PWM;
+  }
+  else if (motorStr == "rr") {
+    IN1 = RightRearMotor_AIN1; 
+    IN2 = RightRearMotor_AIN2;
+    motorPWM = RightRearMotor_PWM;
+  }
+  else if (motorStr == "lr") {
+    IN1 = LeftRearMotor_BIN1; 
+    IN2 = LeftRearMotor_BIN2;
+    motorPWM = LeftRearMotor_PWM;
+  }
+  if (mdirection == 1){
+    digitalWrite(IN1, LOW); 
+    digitalWrite(IN2, HIGH); 
+  }
+  else if (mdirection == -1){
+    digitalWrite(IN1, HIGH); 
+    digitalWrite(IN2, LOW); 
+  }
+  analogWrite(motorPWM, mspeed);
+}
+
+void processInput (int speed_RR,int speed_RL,int speed_FR,int speed_FL){
+  static long receivedNumber = 0;
+  static boolean negative = false;
+
+  byte c = Serial.read ();
+ 
+
+  switch (c){
+  case endOfNumberDelimiter:
+    if (negative)
+      SetPWM(- receivedNumber, pwmChannel);
+    else
+      SetPWM(receivedNumber, pwmChannel);
+
+    // fall through to start a new number
+  case startOfNumberDelimiter:
+    receivedNumber = 0;
+    negative = false;
+    pwmChannel = 0;
+    break;
+
+  case 'f': // Go FORWARD
+    goForward(speed_RR , speed_RL, speed_FR, speed_FL);
+    //Serial.println("forward");
+    break;
+
+  case 'b': // Go BACK
+    goBackwad(speed_RR , speed_RL, speed_FR, speed_FL);
+    //Serial.println("backward");
+    break;
+
+  case 'r':
+    moveRight(speed_RR , speed_RL, speed_FR, speed_FL);
+    break;
+
+  case 'l':
+    moveLeft(speed_RR , speed_RL, speed_FR, speed_FL);
+    break;
+    
+  case 'i':
+    turnRight(speed_RR , speed_RL, speed_FR, speed_FL);
+    break;
+
+  case 'j':
+    turnLeft(speed_RR , speed_RL, speed_FR, speed_FL);
+    break;
+
+  case 's':
+    hardStop();
+    break;
+
+  case 'o':
+    Shoot();
+
+  case 'x':
+    pwmChannel = 1; // RightFrontMotor_PWM
+    break;
+  case 'y': // LeftFrontMotor_PWM
+    pwmChannel = 2;
+    break;
+
+  case '0' ... '9':
+    receivedNumber *= 10;
+    receivedNumber += c - '0';
+    break;
+
+  case '-':
+    negative = true;
+    break;
+  } // end of switch
+} // void processInput ()
+
+void goForward(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL){
+  motorControl("rf", 1, mspeed_FR);
+  motorControl("lf", 1, mspeed_FL);
+  motorControl("rr", 1, mspeed_RR);
+  motorControl("lr", 1, mspeed_RL);
+}// void goForward(int mspeed)
+
+void goBackwad(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL){
+  motorControl("rf", -1, mspeed_FR);
+  motorControl("lf", -1, mspeed_FL);
+  motorControl("rr", -1, mspeed_RR);
+  motorControl("lr", -1, mspeed_RL);
+}// void goBackwad(int mspeed)
+
+void moveRight(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL){
+  motorControl("rf", -1, mspeed_FR);
+  motorControl("lf", 1, mspeed_FL);
+  motorControl("rr", 1, mspeed_RR);
+  motorControl("lr", -1, mspeed_RL);
+}// void moveRight(int mspeed)
+
+void moveLeft(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL){
+  motorControl("rf", 1, mspeed_FR);
+  motorControl("lf", -1, mspeed_FL);
+  motorControl("rr", -1, mspeed_RR);
+  motorControl("lr", 1, mspeed_RL);
+}// void moveLeft(int mspeed)
+
+
+void turnRight(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL){
+  motorControl("rf", -1, mspeed_FR);
+  motorControl("lf", 1, mspeed_FL);
+  motorControl("rr", -1, mspeed_RR);
+  motorControl("lr", 1, mspeed_RL);
+}// void turnRight(int mspeed)
+
+void turnLeft(int mspeed_RR,int mspeed_RL,int mspeed_FR,int mspeed_FL){
+  motorControl("rf", 1, mspeed_FR);
+  motorControl("lf", -1, mspeed_FL);
+  motorControl("rr", 1, mspeed_RR);
+  motorControl("lr", -1, mspeed_RL);
+}// void turnRight(int mspeed)
+
+void stopRobot(int delay_ms){
+  analogWrite(RightFrontMotor_PWM, 0);
+  analogWrite(LeftFrontMotor_PWM, 0);
+  analogWrite(RightRearMotor_PWM, 0);
+  analogWrite(LeftRearMotor_PWM, 0);
+  delay(delay_ms);
+}// void stopRobot(int delay_ms)
+
+void hardStop(){
+
+
+  analogWrite(RightFrontMotor_PWM, 0);
+  analogWrite(LeftFrontMotor_PWM, 0);
+  analogWrite(RightRearMotor_PWM, 0);
+  analogWrite(LeftRearMotor_PWM, 0);
+}// void stopRobot()
+
+void Shoot(){
+      shooter.write(0); // hold balls
+      motor1.write(111); // Set motor1 speed
+      motor2.write(111); // Set motor1 speed
+      delay(1500);
+      shooter.write(90); // shoot balls
+      delay(2000);
+      motor1.write(30); // Set motor1 speed
+      motor2.write(30); // Set motor1 speed
+      
+}
+
+void SetPWM (const long pwm_num, byte pwm_channel){
+  if(pwm_channel==1){ // DRIVE MOTOR
+    analogWrite(RightFrontMotor_PWM, pwm_num);
+    pwmRvalue = pwm_num;
+  }
+  else if(pwm_channel==2){ // STEERING MOTOR
+    analogWrite(LeftFrontMotor_PWM, pwm_num);
+    pwmLvalue = pwm_num;
+  }
+}// void SetPWM (const long pwm_num, byte pwm_channel)
+
+void readEncoder_RR(){
+    int RR_EN_b = digitalRead(RR_EN_B);
+    if(RR_EN_b > 0){
+        posi_RR +=1 * 4 * 1.38;
+    }
+    else {
+        posi_RR -= 1 * 4 * 1.38;
+    }
+
+
+}
+void readEncoder_RL(){
+    int RL_EN_b = digitalRead(RL_EN_B);
+    if(RL_EN_b > 0){
+        posi_RL +=4 ;
+    }
+    else {
+        posi_RL -=4 ;
+    }
+
+}
+void readEncoder_FR(){
+    int FR_EN_b = digitalRead(FR_EN_B);
+
+    if(FR_EN_b > 0){
+        posi_FR +=4 ;
+    }
+    else {
+        posi_FR -=4 ;
+    }
+
+
+
+
+}
+void readEncoder_FL(){
+    int FL_EN_b = digitalRead(FL_EN_B);
+
+    if(FL_EN_b > 0){
+        posi_FL +=4 * 360/352;
+    }
+    else {
+        posi_FL -=4 *360/352 ;
+    }
+}
+
+
+   
